@@ -1,0 +1,12 @@
+[irc]
+host = "irc.rizon.net"
+# + prefix indicates a secure connection, lack of prefix an insecure connection
+port = "+6697"
+nickname = "tama"
+username = "tama"
+realname = "tama"
+# Identifies registered nickname with NickServ service.
+# nickserv_password = ""
+
+[tama]
+prefix = "."

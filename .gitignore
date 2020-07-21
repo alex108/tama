@@ -1,0 +1,19 @@
+# Project config
+config.toml
+
+# Python
+*.py[cdo]
+__pycache__/
+
+# Distutils/Setuptools
+*.egg-info/
+out/
+dist/
+
+# Virtualenv
+env/
+venv/
+
+# IDE files
+*.iml
+.idea/
