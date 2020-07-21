@@ -1,5 +1,6 @@
 import toml
 
+from .schema_validate import validate_map_schema
 from .schema import Config
 
 __all__ = ["read_config"]
@@ -8,4 +9,4 @@ __all__ = ["read_config"]
 def read_config(filename: str) -> Config:
     with open(filename, "r") as config:
         cfg = toml.loads(config.read())
-        return Config(cfg)
+        return validate_map_schema(cfg, Config)

@@ -1,12 +1,31 @@
-[irc]
-host = "irc.rizon.net"
-# + prefix indicates a secure connection, lack of prefix an insecure connection
-port = "+6697"
-nickname = "tama"
-username = "tama"
-realname = "tama"
-# Identifies registered nickname with NickServ service.
-# nickserv_password = ""
+# The server block contains connection parameters for all connections bot will
+# maintain.
+[server]
+
+    # Each server has a named section
+    [server.rizon]
+    # Server hostname.
+    host = "irc.rizon.net"
+    # + prefix indicates a secure connection, lack of prefix an insecure
+    # connection.
+    port = "+6697"
+    # IRC parameters
+    nick = "tama"
+    user = "tama"
+    realname = "tama"
+    # Password if the server requires PASS authentication on connect
+    # password = ""
+
+        # Servers might use service nickname authentication. If this section is
+        # configured, bot will proceed to identify with the given service as
+        # soon as RPL_WELCOME is received.
+        [server.rizon.service_auth]
+        service = "NickServ"  # Defaults to NickServ
+        command = "IDENTIFY"  # Defaults to IDENTIFY
+        # If a nickserv_username is set, it will be prepended before the given
+        # password in the identify command.
+        # username = ""
+        password = ""
 
 [tama]
 prefix = "."

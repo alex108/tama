@@ -7,6 +7,7 @@ from typing import Protocol, Pattern, Match, Optional, Union, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tama.irc.user import IRCUser
+    from tama.irc.client import IRCClient
     from tama.core.bot import TamaBot
 
 __all__ = ["Action", "Command", "Regex"]
@@ -35,12 +36,24 @@ class Command(Action):
 
     class Executor(Protocol):
         def __call__(
-            self, text: str, *, sender: "IRCUser" = None, bot: "TamaBot" = None
+            self,
+            text: str,
+            *,
+            channel: str = None,
+            sender: "IRCUser" = None,
+            bot: "TamaBot" = None,
+            client: "IRCClient" = None
         ) -> Optional[str]: ...
 
     class AsyncExecutor(Protocol):
         async def __call__(
-            self, text: str, *, sender: "IRCUser" = None, bot: "TamaBot" = None
+            self,
+            text: str,
+            *,
+            channel: str = None,
+            sender: "IRCUser" = None,
+            bot: "TamaBot" = None,
+            client: "IRCClient" = None
         ) -> Optional[str]: ...
 
     def __init__(
@@ -59,12 +72,24 @@ class Regex(Action):
 
     class Executor(Protocol):
         def __call__(
-            self, match: Match, *, sender: "IRCUser" = None, bot: "TamaBot" = None
+            self,
+            match: Match,
+            *,
+            channel: str = None,
+            sender: "IRCUser" = None,
+            bot: "TamaBot" = None,
+            client: "IRCClient" = None
         ) -> Optional[str]: ...
 
     class AsyncExecutor(Protocol):
         async def __call__(
-            self, match: Match, *, sender: "IRCUser" = None, bot: "TamaBot" = None
+            self,
+            match: Match,
+            *,
+            channel: str = None,
+            sender: "IRCUser" = None,
+            bot: "TamaBot" = None,
+            client: "IRCClient" = None
         ) -> Optional[str]: ...
 
     def __init__(

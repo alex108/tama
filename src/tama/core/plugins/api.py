@@ -10,7 +10,7 @@ from .api_internal import *
 __all__ = ["command", "regex"]
 
 
-def command(name: str = None, *, permissions: List[str]):
+def command(name: str = None, *, permissions: List[str] = None):
     def decorator(f: Command.Executor):
         sig = inspect.signature(f)
 

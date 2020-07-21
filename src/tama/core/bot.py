@@ -2,12 +2,13 @@
 
 """
 import re
+import asyncio as aio
 from typing import List, Dict, Optional
 from logging import getLogger
 
-from tama.config import Config
+from tama.config import Config, ServerConfig
 from tama.irc import IRCClient
-from tama.irc.signal import *
+from tama.irc.event import *
 from tama.core.plugins import *
 
 from .exit_status import ExitStatus
@@ -18,33 +19,41 @@ logger = getLogger(__name__)
 
 
 class TamaBot:
-    client: Optional[IRCClient]
-    plugins: List[Plugin]
-
+    config: Config
     command_prefix: str
+
+    clients: List[IRCClient]
+    plugins: List[Plugin]
 
     act_commands: Dict[str, Command]
     act_regex: List[Regex]
 
     ExitStatus = ExitStatus
-    _exit_status: ExitStatus
+    _exit_status: Optional[ExitStatus]
 
     def __init__(self, config: Config):
-        self.client = None
+        self.config = config
         self.command_prefix = config.tama.prefix
+        # Client bookkeeping
+        self.clients = []
         # Load plugins
         self.plugins = loader.load_plugins("plugins")
         # For registered actions
         self.act_commands = {}
         self.act_regex = []
-        # By default, reconnect on exit
-        self._exit_status = ExitStatus.RECONNECT
+        # Only set exit status when exiting
+        self._exit_status = None
         # Register plugin actions
         self._setup_plugins()
 
-    def set_client(self, client: IRCClient):
-        self.client = client
-        self._subscribe_client_events()
+    def connect(self, client: IRCClient):
+        self.clients.append(client)
+        self._subscribe_client_events(client)
+
+    async def create_clients_from_config(self):
+        for name, srv in self.config.server.items():
+            client = await IRCClient.create(srv)
+            self.connect(client)
 
     def _setup_plugins(self):
         for plug in self.plugins:
@@ -54,24 +63,46 @@ class TamaBot:
                 elif isinstance(act, Regex):
                     self.act_regex.append(act)
 
-    def _subscribe_client_events(self):
-        self.client.bus.subscribe(InvitedSignal, self.on_invite)
-        self.client.bus.subscribe(MessagedSignal, self.on_message)
-        self.client.bus.subscribe(ClosedSignal, self.on_closed)
+    def _subscribe_client_events(self, client: IRCClient):
+        client.bus.subscribe(InvitedEvent, self.on_invite)
+        client.bus.subscribe(MessagedEvent, self.on_message)
+        client.bus.subscribe(ClosedEvent, self.on_closed)
 
-    def _unsubscribe_client_events(self):
-        self.client.bus.unsubscribe(InvitedSignal, self.on_invite)
-        self.client.bus.unsubscribe(MessagedSignal, self.on_message)
-        self.client.bus.unsubscribe(ClosedSignal, self.on_closed)
+    def _unsubscribe_client_events(self, client: IRCClient):
+        client.bus.unsubscribe(InvitedEvent, self.on_invite)
+        client.bus.unsubscribe(MessagedEvent, self.on_message)
+        client.bus.unsubscribe(ClosedEvent, self.on_closed)
 
     async def run(self) -> ExitStatus:
-        await self.client.run()
+        done = set()
+        pending = {
+            aio.create_task(c.run()) for c in self.clients
+        }
+        while self._exit_status is None:
+            for task in done:
+                result = await task
+                # We only get a client when we queued recreating a lost one
+                if isinstance(result, IRCClient):
+                    self.connect(result)
+                    pending.add(aio.create_task(result.run()))
+                # We get a config when we lost a client
+                elif isinstance(result, ServerConfig):
+                    pending.add(aio.create_task(IRCClient.create_after(
+                        result, 5
+                    )))
+            done, pending = await aio.wait(
+                pending, return_when=aio.FIRST_COMPLETED
+            )
+
+        if len(pending) > 0:
+            await aio.wait(pending, return_when=aio.ALL_COMPLETED)
+
         return self._exit_status
 
-    async def on_invite(self, evt: InvitedSignal):
-        self.client.join(evt.to)
+    async def on_invite(self, evt: InvitedEvent):
+        evt.client.join(evt.to)
 
-    async def on_message(self, evt: MessagedSignal):
+    async def on_message(self, evt: MessagedEvent):
         # Always log message
         logger.info(
             "[rizon:%s] <%s> %s",
@@ -79,6 +110,7 @@ class TamaBot:
             evt.who.nick,
             evt.message,
         )
+        exec_kwargs = dict(channel=evt.where, sender=evt.who, bot=self, client=evt.client)
 
         # Parse commands
         if evt.message.startswith(self.command_prefix):
@@ -92,14 +124,12 @@ class TamaBot:
             r = self.act_commands.get(cmd)
             if r:
                 if r.is_async:
-                    result = await r.async_executor(
-                        text, sender=evt.who, bot=self
-                    )
+                    result = await r.async_executor(text, **exec_kwargs)
                 else:
-                    result = r.executor(text, sender=evt.who, bot=self)
+                    result = r.executor(text, **exec_kwargs)
 
                 if result:
-                    self.client.privmsg(evt.where, result)
+                    evt.client.privmsg(evt.where, f"{evt.who.nick}, {result}")
 
             return
 
@@ -108,36 +138,23 @@ class TamaBot:
             match = re.match(r.pattern, evt.message)
             if match:
                 if r.is_async:
-                    result = await r.async_executor(
-                        match, sender=evt.who, bot=self
-                    )
+                    result = await r.async_executor(match, **exec_kwargs)
                 else:
-                    result = r.executor(match, sender=evt.who, bot=self)
+                    result = r.executor(match, **exec_kwargs)
 
                 if result:
-                    self.client.privmsg(evt.where, result)
+                    evt.client.privmsg(evt.where, f"{evt.who.nick}, {result}")
 
-    async def on_closed(self, evt: ClosedSignal):
+    async def on_closed(self, evt: ClosedEvent):
         # Stop listening for events as we are entering a shutdown state
-        self._unsubscribe_client_events()
-
-    def nick(self, nickname: str):
-        self.client.nick(nickname)
-
-    def message(self, target: str, message: str):
-        self.client.privmsg(target, message)
-
-    def notice(self, target: str, message: str):
-        self.client.notice(target, message)
+        self._unsubscribe_client_events(evt.client)
 
     def shutdown(self, reason: str):
         self._exit_status = ExitStatus.QUIT
-        self.client.quit(reason)
-
-    def reconnect(self, reason: str):
-        self._exit_status = ExitStatus.RECONNECT
-        self.client.quit(reason)
+        for client in self.clients:
+            client.quit(reason)
 
     def reload(self, reason: str):
         self._exit_status = ExitStatus.RELOAD
-        self.client.quit(reason)
+        for client in self.clients:
+            client.quit(reason)

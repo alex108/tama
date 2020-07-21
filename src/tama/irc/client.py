@@ -3,26 +3,32 @@ Handles the interpretation of parsed IRC messages and converts them to an
 observable event stream.
 """
 import asyncio as aio
-from typing import List, Deque, Optional
+from typing import List, Deque
 from collections import deque
 from logging import getLogger
 
-from tama.config import Config
+from tama.config import ServerConfig
 from tama.event import EventBus
 from tama.irc.stream import IRCStream, IRCMessage
 
-from .signal import *
+from .event import *
 
 logger = getLogger(__name__)
 
 
 class IRCClient:
     __slots__ = (
-        "stream", "bus", "nickname", "username", "realname", "channel_list",
+        "startup_config", "stream", "bus",
+        "nickname", "username", "realname",
+        "channel_list",
         "_starting_up", "_shutting_down", "_inbound_queue", "_outbound_queue",
-        "_nickserv_password",
+        "_on_register",
     )
 
+    # Client data
+    startup_config: ServerConfig
+
+    # Connection primitives
     stream: IRCStream
     bus: EventBus
 
@@ -32,79 +38,73 @@ class IRCClient:
     realname: str
 
     # State keeping
-    channel_list: List[str]
+    _channel_list: List[str]
 
     # Internals
     _starting_up: bool
     _shutting_down: bool
     _inbound_queue: Deque[IRCMessage]
     _outbound_queue: "aio.Queue[IRCMessage]"
+    # Actions to perform once the IRC connection is registered.
+    # These are not immediately queued on create as the connection is not
+    # registered yet.
+    _on_register: Deque[IRCMessage]
 
-    # Services auth
-    _nickserv_password: Optional[str]
+    def __init__(self, stream: IRCStream, startup_config: ServerConfig):
+        self.startup_config = startup_config
 
-    def __init__(self, stream: IRCStream, nickname: str, username: str, realname: str):
         self.stream = stream
         self.bus = EventBus(accept=[
-            InvitedSignal, MessagedSignal, ClosedSignal
+            InvitedEvent, MessagedEvent, ClosedEvent
         ])
 
         self._starting_up = True
         self._shutting_down = False
         self._inbound_queue = deque()
         self._outbound_queue = aio.Queue()
+        self._on_register = deque()
 
-        self.nickname = nickname
-        self.username = username
-        self.realname = realname
+        self.nickname = startup_config.nick
+        self.username = startup_config.user
+        self.realname = startup_config.realname
+
         self.channel_list = []
 
     @classmethod
-    async def create(
-        cls,
-        host: str,
-        port: int,
-        secure: bool = False,
-        nickname: str = "tama",
-        username: str = "tama",
-        realname: str = "tama",
-        nickserv_password: str = None
-    ) -> "IRCClient":
-        stream = await IRCStream.create(host, port, secure)
-        obj = cls(stream, nickname, username, realname)
-        obj.nick(nickname)
-        obj.user(username, realname)
-        if nickserv_password:
-            obj._nickserv_password = nickserv_password
+    async def create(cls, config: ServerConfig) -> "IRCClient":
+        if config.port.startswith("+"):
+            secure = True
+            port = int(config.port)
+        else:
+            secure = False
+            port = int(config.port)
+        stream = await IRCStream.create(config.host, port, secure)
+        obj = cls(stream, config)
+        obj.nick(config.nick)
+        obj.user(config.user, config.realname)
+        if config.service_auth:
+            cmd = config.service_auth.command or "IDENTIFY "
+            if config.service_auth.username:
+                cmd += config.service_auth.username + " "
+            cmd += config.service_auth.password
+            obj._on_register.append(IRCMessage(
+                command="PRIVMSG",
+                middle=(config.service_auth.service or "NickServ",),
+                trailing=cmd,
+            ))
         return obj
 
     @classmethod
-    async def create_from_config(
-        cls,
-        config: Config
+    async def create_after(
+        cls, config: ServerConfig, seconds: int
     ) -> "IRCClient":
-        if config.irc.port.startswith("+"):
-            secure = True
-            port = int(config.irc.port)
-        else:
-            secure = False
-            port = int(config.irc.port)
-        if config.irc.nickserv_password:
-            ns_pass = config.irc.nickserv_password
-        else:
-            ns_pass = None
-        return await IRCClient.create(
-            config.irc.host,
-            port, secure,
-            config.irc.nickname,
-            config.irc.username,
-            config.irc.realname,
-            ns_pass,
-        )
+        await aio.sleep(seconds)
+        return await cls.create(config)
 
-    async def run(self) -> None:
+    async def run(self) -> ServerConfig:
         inbound = aio.create_task(self._inbound())
         outbound = aio.create_task(self._outbound())
+        pending = []
         while not self._shutting_down:
             done, pending = await aio.wait(
                 [inbound, outbound], return_when=aio.FIRST_COMPLETED
@@ -114,7 +114,9 @@ class IRCClient:
             if outbound in done:
                 outbound = aio.create_task(self._outbound())
         # Entered shutdown state, which means the inbound queue reached EOF
-        return
+        # Don't await any further because nothing can be sent anymore
+        # Return startup config when connection dies for easy reconnection
+        return self.startup_config
 
     async def _inbound(self) -> None:
         # Block if we have nothing to process
@@ -166,14 +168,16 @@ class IRCClient:
         where = msg.middle[0]
         if where == self.nickname:
             where = who.nick
-        self.bus.broadcast(MessagedSignal(
+        self.bus.broadcast(MessagedEvent(
+            client=self,
             who=who,
             where=where,
             message=msg.trailing,
         ))
 
     def handle_server_invite(self, msg: IRCMessage):
-        self.bus.broadcast(InvitedSignal(
+        self.bus.broadcast(InvitedEvent(
+            client=self,
             who=msg.parse_prefix_as_user(),
             to=msg.trailing,
         ))
@@ -188,16 +192,17 @@ class IRCClient:
         )
 
     def handle_server_error(self, msg: IRCMessage):
-        self.bus.broadcast(ClosedSignal(
+        self.bus.broadcast(ClosedEvent(
+            client=self,
             message=msg.trailing,
         ))
 
     # Upstream reply code handlers
     def handle_server_rpl_welcome(self, msg: IRCMessage):
         self._starting_up = False
-        if self._nickserv_password:
-            self.nickserv_identify(self._nickserv_password)
-            self._nickserv_password = None  # Wipe unnecessary data
+        while self._on_register:
+            m = self._on_register.popleft()
+            self._outbound_queue.put_nowait(m)
 
     def handle_server_err_nicknameinuse(self, msg: IRCMessage):
         # If we are still starting up, then retry with an underscore
@@ -256,6 +261,3 @@ class IRCClient:
             command="QUIT",
             trailing=reason,
         ))
-
-    def nickserv_identify(self, password: str):
-        self.privmsg("NickServ", "IDENTIFY " + password)
