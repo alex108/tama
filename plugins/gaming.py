@@ -1,10 +1,11 @@
 """
 gaming.py
 
-Dice, coins, and random generation for gaming.
+Dice, coins, and random generation for gaming. Ported from CloudBot.
 
 Modified By:
     - Luke Rogers <https://github.com/lukeroge>
+    - Alex108 <https://github.com/alex108>
 
 License:
     GPL v3
@@ -48,15 +49,12 @@ def dice(text, sender=None, client=None):
     :type text: str
     """
 
-    if hasattr(text, "groups"):
-        text, desc = text.groups()
-    else:  # type(text) == str
-        match = valid_diceroll.match(whitespace_re.sub("", text))
-        if match:
-            text, desc = match.groups()
-        else:
-            client.notice(sender.nick, "Invalid dice roll '{}'".format(text))
-            return
+    match = valid_diceroll.match(whitespace_re.sub("", text))
+    if match:
+        text, desc = match.groups()
+    else:
+        client.notice(sender.nick, "Invalid dice roll '{}'".format(text))
+        return
 
     if "d" not in text:
         return

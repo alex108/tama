@@ -19,6 +19,7 @@ async def main():
     while (status := await bot.run()) != TamaBot.ExitStatus.QUIT:
         if status == TamaBot.ExitStatus.RELOAD:
             await aio.sleep(5)  # Wait 5 seconds before reloading
+            cfg = read_config("config.toml")
             bot = TamaBot(cfg)
             await bot.create_clients_from_config()
 
