@@ -17,6 +17,9 @@ class IRCMessage:
     middle: Tuple[str, ...] = ()
     trailing: Optional[str] = None
 
+    # Keep the original numeric for raw access
+    numeric: Optional[str] = None
+
     # UTF-8 assumed unless specified otherwise
     encoding: str = "utf-8"
 
@@ -57,21 +60,22 @@ class IRCMessage:
 
         if len(command) == 3 and "0" <= command[0] <= "9":
             # Handle numeric replies
+            numeric = command
             command = REPLY_CODES.get(command, None)
             if command is None:
                 # Unknown reply code
-                print(command)
-                raise InvalidIRCCommandError
+                raise InvalidIRCCommandError(numeric)
         else:
+            numeric = None
             if command not in COMMANDS:
                 # Bad command
-                print(command)
-                raise InvalidIRCCommandError
+                raise InvalidIRCCommandError(command)
 
         return IRCMessage(
             encoding=encoding,
             prefix=prefix,
             command=command,
+            numeric=numeric,
             middle=middle,
             trailing=trailing
         )
@@ -83,7 +87,10 @@ class IRCMessage:
         if self.prefix:
             buf.extend(f":{self.prefix} ".encode(self.encoding))
 
-        buf.extend(self.command.encode(self.encoding))
+        if not self.numeric:
+            buf.extend(self.command.encode(self.encoding))
+        else:
+            buf.extend(self.numeric.encode(self.encoding))
 
         if len(self.middle) > 0:
             for mid in self.middle:

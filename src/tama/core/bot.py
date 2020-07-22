@@ -3,10 +3,12 @@
 """
 import re
 import asyncio as aio
+import logging
+import logging.handlers
 from typing import List, Dict, Optional
-from logging import getLogger
+from pathlib import Path
 
-from tama.config import Config, ServerConfig
+from tama.config import Config
 from tama.irc import IRCClient
 from tama.irc.event import *
 from tama.core.plugins import *
@@ -15,12 +17,13 @@ from .exit_status import ExitStatus
 
 __all__ = ["TamaBot"]
 
-logger = getLogger(__name__)
-
 
 class TamaBot:
     config: Config
     command_prefix: str
+    log_folder: str
+    log_raw: bool
+    log_irc: bool
 
     clients: List[IRCClient]
     plugins: List[Plugin]
@@ -34,6 +37,14 @@ class TamaBot:
     def __init__(self, config: Config):
         self.config = config
         self.command_prefix = config.tama.prefix
+        self.log_folder = config.tama.log_folder or "logs"
+        # Bloody booleans
+        self.log_raw = (
+            config.tama.log_raw if config.tama.log_raw is not None else False
+        )
+        self.log_irc = (
+            config.tama.log_irc if config.tama.log_irc is not None else True
+        )
         # Client bookkeeping
         self.clients = []
         # Load plugins
@@ -52,8 +63,10 @@ class TamaBot:
 
     async def create_clients_from_config(self):
         for name, srv in self.config.server.items():
-            client = await IRCClient.create(srv)
+            client = await IRCClient.create(name, srv)
             self.connect(client)
+            if self.log_raw:
+                self._setup_client_raw_logger(client)
 
     def _setup_plugins(self):
         for plug in self.plugins:
@@ -63,15 +76,58 @@ class TamaBot:
                 elif isinstance(act, Regex):
                     self.act_regex.append(act)
 
-    def _subscribe_client_events(self, client: IRCClient):
+    def _subscribe_client_events(self, client: IRCClient) -> None:
         client.bus.subscribe(InvitedEvent, self.on_invite)
         client.bus.subscribe(MessagedEvent, self.on_message)
         client.bus.subscribe(ClosedEvent, self.on_closed)
 
-    def _unsubscribe_client_events(self, client: IRCClient):
+    def _unsubscribe_client_events(self, client: IRCClient) -> None:
         client.bus.unsubscribe(InvitedEvent, self.on_invite)
         client.bus.unsubscribe(MessagedEvent, self.on_message)
         client.bus.unsubscribe(ClosedEvent, self.on_closed)
+
+    def _setup_client_raw_logger(self, client: IRCClient) -> None:
+        if not self.log_raw:
+            return
+
+        log_dir = Path(self.log_folder)
+        if not log_dir.is_dir():
+            log_dir.mkdir(parents=True)
+
+        hdl = logging.handlers.TimedRotatingFileHandler(
+            filename=Path(self.log_folder, f"{client.name}.raw.log"),
+            when="midnight",
+            encoding="utf-8",
+        )
+        hdl.setFormatter(logging.Formatter(
+            fmt=f"[{client.name}] [%(asctime)s] %(message)s",
+            datefmt="%H:%M:%S"
+        ))
+        client.logger.addHandler(hdl)
+
+    def _log_irc_message(
+        self, client: IRCClient, buffer: str, nick: str, message: str
+    ) -> None:
+        if not self.log_irc:
+            return
+
+        log_dir = Path(self.log_folder, client.name)
+        if not log_dir.is_dir():
+            log_dir.mkdir(parents=True)
+
+        log = logging.getLogger(f"tama.server.{client.name}.irc.{buffer}")
+        if len(log.handlers) == 0:
+            hdl = logging.handlers.TimedRotatingFileHandler(
+                filename=log_dir.joinpath(f"{buffer}.log"),
+                when="midnight",
+                encoding="utf-8",
+            )
+            hdl.setFormatter(logging.Formatter(
+                fmt=f"[{client.name}:{buffer}] [%(asctime)s] %(message)s",
+                datefmt="%H:%M:%S"
+            ))
+            log.addHandler(hdl)
+        log.info("<%s> %s", nick, message)
 
     async def run(self) -> ExitStatus:
         done = set()
@@ -85,10 +141,11 @@ class TamaBot:
                 if isinstance(result, IRCClient):
                     self.connect(result)
                     pending.add(aio.create_task(result.run()))
-                # We get a config when we lost a client
-                elif isinstance(result, ServerConfig):
+                # We get (name, config) when we lost a client
+                elif isinstance(result, tuple):
+                    name, cfg = result
                     pending.add(aio.create_task(IRCClient.create_after(
-                        result, 5
+                        name, cfg, 5
                     )))
             done, pending = await aio.wait(
                 pending, return_when=aio.FIRST_COMPLETED
@@ -104,13 +161,13 @@ class TamaBot:
 
     async def on_message(self, evt: MessagedEvent):
         # Always log message
-        logger.info(
-            "[rizon:%s] <%s> %s",
-            evt.where,
-            evt.who.nick,
-            evt.message,
+        self._log_irc_message(evt.client, evt.where, evt.who.nick, evt.message)
+        exec_kwargs = dict(
+            channel=evt.where,
+            sender=evt.who,
+            bot=self,
+            client=evt.client
         )
-        exec_kwargs = dict(channel=evt.where, sender=evt.who, bot=self, client=evt.client)
 
         # Parse commands
         if evt.message.startswith(self.command_prefix):

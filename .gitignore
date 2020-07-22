@@ -1,5 +1,6 @@
-# Project config
+# Project files
 config.toml
+logs/
 
 # Python
 *.py[cdo]

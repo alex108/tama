@@ -4,7 +4,7 @@
 
     # Each server has a named section
     [server.rizon]
-    # Server hostname.
+    # Server hostname
     host = "irc.rizon.net"
     # + prefix indicates a secure connection, lack of prefix an insecure
     # connection.
@@ -28,4 +28,38 @@
         password = ""
 
 [tama]
+# Set command prefix for bot actions
 prefix = "."
+# Set logging folder
+log_folder = "logs"
+# Both of these flags may be enabled at the same time, as the raw logging and
+# parsed logging write to different files.
+# If true, server messages will be logged in their raw state.
+log_raw = true
+# If true, server messages will be logged in their parsed state.
+log_irc = true
+
+# This config is passed directly to python's logging module.
+# See: https://docs.python.org/3/library/logging.config.html
+# If not set, dictConfig() will never be called as there are no project
+# defaults.
+[logging]
+version = 1
+
+    [logging.formatters]
+
+        [logging.formatters.default]
+        format = '%(asctime)s %(levelname)-8s %(name)-15s %(message)s'
+        datefmt = '%Y-%m-%d %H:%M:%S'
+
+    [logging.handlers]
+
+        [logging.handlers.default]
+        class = "logging.StreamHandler"
+        formatter = "default"
+        level = "INFO"
+        stream = "ext://sys.stdout"
+
+    [logging.root]
+    level = "INFO"
+    handlers = ["default"]

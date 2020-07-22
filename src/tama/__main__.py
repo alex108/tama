@@ -1,5 +1,6 @@
 import signal
 import asyncio as aio
+import logging.config
 from types import FrameType
 
 from tama.config import read_config
@@ -8,6 +9,9 @@ from tama.core import TamaBot
 
 async def main():
     cfg = read_config("config.toml")
+    if cfg.logging:
+        logging.config.dictConfig(cfg.logging)
+
     bot = TamaBot(cfg)
     await bot.create_clients_from_config()
 

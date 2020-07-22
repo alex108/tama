@@ -25,9 +25,13 @@ class ServerConfig:
 @dataclass
 class TamaConfig:
     prefix: str
+    log_folder: Optional[str]
+    log_raw: Optional[bool]
+    log_irc: Optional[bool]
 
 
 @dataclass
 class Config:
     server: Dict[str, ServerConfig]
     tama: TamaConfig
+    logging: Optional[dict]

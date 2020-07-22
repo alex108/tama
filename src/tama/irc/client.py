@@ -3,9 +3,9 @@ Handles the interpretation of parsed IRC messages and converts them to an
 observable event stream.
 """
 import asyncio as aio
-from typing import List, Deque
+from typing import Tuple, List, Deque
 from collections import deque
-from logging import getLogger
+from logging import Logger, getLogger
 
 from tama.config import ServerConfig
 from tama.event import EventBus
@@ -18,14 +18,16 @@ logger = getLogger(__name__)
 
 class IRCClient:
     __slots__ = (
-        "startup_config", "stream", "bus",
+        "name", "startup_config", "stream", "bus",
         "nickname", "username", "realname",
         "channel_list",
+        "logger_name", "logger",
         "_starting_up", "_shutting_down", "_inbound_queue", "_outbound_queue",
         "_on_register",
     )
 
     # Client data
+    name: str
     startup_config: ServerConfig
 
     # Connection primitives
@@ -40,6 +42,10 @@ class IRCClient:
     # State keeping
     _channel_list: List[str]
 
+    # Raw IRC protocol logger
+    logger_name: str
+    logger: Logger
+
     # Internals
     _starting_up: bool
     _shutting_down: bool
@@ -50,7 +56,10 @@ class IRCClient:
     # registered yet.
     _on_register: Deque[IRCMessage]
 
-    def __init__(self, stream: IRCStream, startup_config: ServerConfig):
+    def __init__(
+        self, name: str, startup_config: ServerConfig, stream: IRCStream
+    ) -> None:
+        self.name = name
         self.startup_config = startup_config
 
         self.stream = stream
@@ -70,8 +79,11 @@ class IRCClient:
 
         self.channel_list = []
 
+        self.logger_name = f"tama.server.{name}.raw"
+        self.logger = getLogger(self.logger_name)
+
     @classmethod
-    async def create(cls, config: ServerConfig) -> "IRCClient":
+    async def create(cls, name: str, config: ServerConfig) -> "IRCClient":
         if config.port.startswith("+"):
             secure = True
             port = int(config.port)
@@ -79,7 +91,7 @@ class IRCClient:
             secure = False
             port = int(config.port)
         stream = await IRCStream.create(config.host, port, secure)
-        obj = cls(stream, config)
+        obj = cls(name, config, stream)
         obj.nick(config.nick)
         obj.user(config.user, config.realname)
         if config.service_auth:
@@ -96,12 +108,12 @@ class IRCClient:
 
     @classmethod
     async def create_after(
-        cls, config: ServerConfig, seconds: int
+        cls, name: str, config: ServerConfig, seconds: int
     ) -> "IRCClient":
         await aio.sleep(seconds)
-        return await cls.create(config)
+        return await cls.create(name, config)
 
-    async def run(self) -> ServerConfig:
+    async def run(self) -> Tuple[str, ServerConfig]:
         inbound = aio.create_task(self._inbound())
         outbound = aio.create_task(self._outbound())
         pending = []
@@ -113,10 +125,10 @@ class IRCClient:
                 inbound = aio.create_task(self._inbound())
             if outbound in done:
                 outbound = aio.create_task(self._outbound())
-        # Entered shutdown state, which means the inbound queue reached EOF
+        # Entered shutdown state, which means the inbound queue reached EOF.
         # Don't await any further because nothing can be sent anymore
         # Return startup config when connection dies for easy reconnection
-        return self.startup_config
+        return self.name, self.startup_config
 
     async def _inbound(self) -> None:
         # Block if we have nothing to process
@@ -130,8 +142,7 @@ class IRCClient:
             self._inbound_queue.extend(new_messages)
 
         msg = self._inbound_queue.popleft()
-        # TODO: Use logger don't write directly to stdout
-        print(">> " + msg.raw[:-2].decode("utf-8"))
+        self.logger.info(">> %s", msg.raw[:-2].decode("utf-8"))
         # NOTE: Due to the fact all IRC commands are uppercase we turn them
         # to lower for nicer function dispatching.
         srv_handler = getattr(
@@ -144,8 +155,7 @@ class IRCClient:
     async def _outbound(self):
         # Block until we have a new message to send
         msg = await self._outbound_queue.get()
-        # TODO: Use logger don't write directly to stdout
-        print("<< " + msg.raw[:-2].decode("utf-8"))
+        self.logger.info("<< %s", msg.raw[:-2].decode("utf-8"))
         await self.stream.send_message(msg)
 
     # Upstream command handlers
