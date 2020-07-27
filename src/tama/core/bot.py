@@ -5,15 +5,16 @@ import re
 import asyncio as aio
 import logging
 import logging.handlers
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 from pathlib import Path
 
 from tama.config import Config
-from tama.irc import IRCClient
+from tama.irc import IRCClient, IRCUser
 from tama.irc.event import *
 from tama.core.plugins import *
 
 from .exit_status import ExitStatus
+from .client_proxy import ClientProxy
 
 __all__ = ["TamaBot"]
 
@@ -31,8 +32,13 @@ class TamaBot:
     act_commands: Dict[str, Command]
     act_regex: List[Regex]
 
+    # Enumeration for exit status
     ExitStatus = ExitStatus
     _exit_status: Optional[ExitStatus]
+
+    # Provide access to Client proxy and IRCUser here for a cleaner API
+    Client = ClientProxy
+    User = IRCUser
 
     def __init__(self, config: Config):
         self.config = config
@@ -80,11 +86,23 @@ class TamaBot:
         client.bus.subscribe(InvitedEvent, self.on_invite)
         client.bus.subscribe(MessagedEvent, self.on_message)
         client.bus.subscribe(ClosedEvent, self.on_closed)
+        client.bus.subscribe(BotJoinedEvent, self.on_join)
+        client.bus.subscribe(ChannelJoinedEvent, self.on_join)
+        client.bus.subscribe(BotPartedEvent, self.on_part)
+        client.bus.subscribe(ChannelPartedEvent, self.on_part)
+        client.bus.subscribe(BotKickedEvent, self.on_kick)
+        client.bus.subscribe(ChannelKickedEvent, self.on_kick)
 
     def _unsubscribe_client_events(self, client: IRCClient) -> None:
         client.bus.unsubscribe(InvitedEvent, self.on_invite)
         client.bus.unsubscribe(MessagedEvent, self.on_message)
         client.bus.unsubscribe(ClosedEvent, self.on_closed)
+        client.bus.unsubscribe(BotJoinedEvent, self.on_join)
+        client.bus.unsubscribe(ChannelJoinedEvent, self.on_join)
+        client.bus.unsubscribe(BotPartedEvent, self.on_part)
+        client.bus.unsubscribe(ChannelPartedEvent, self.on_part)
+        client.bus.unsubscribe(BotKickedEvent, self.on_kick)
+        client.bus.unsubscribe(ChannelKickedEvent, self.on_kick)
 
     def _setup_client_raw_logger(self, client: IRCClient) -> None:
         if not self.log_raw:
@@ -105,9 +123,9 @@ class TamaBot:
         ))
         client.logger.addHandler(hdl)
 
-    def _log_irc_message(
-        self, client: IRCClient, buffer: str, nick: str, message: str
-    ) -> None:
+    def _get_irc_logger(
+        self, client: IRCClient, buffer: str
+    ) -> Optional[logging.Logger]:
         if not self.log_irc:
             return
 
@@ -127,7 +145,8 @@ class TamaBot:
                 datefmt="%H:%M:%S"
             ))
             log.addHandler(hdl)
-        log.info("<%s> %s", nick, message)
+
+        return log
 
     async def run(self) -> ExitStatus:
         done = set()
@@ -159,14 +178,42 @@ class TamaBot:
     async def on_invite(self, evt: InvitedEvent):
         evt.client.join(evt.to)
 
+    async def on_join(self, evt: Union[BotJoinedEvent, ChannelJoinedEvent]):
+        log = self._get_irc_logger(evt.client, evt.channel)
+        if log:
+            log.info(
+                "* %s (%s) has joined %s",
+                evt.who.nick, evt.who.address, evt.channel,
+            )
+
+    async def on_part(self, evt: Union[BotPartedEvent, ChannelPartedEvent]):
+        log = self._get_irc_logger(evt.client, evt.channel)
+        if log:
+            log.info(
+                "* %s (%s) has left %s (%s)",
+                evt.who.nick, evt.who.address, evt.channel, evt.message,
+            )
+
+    async def on_kick(self, evt: Union[BotKickedEvent, ChannelKickedEvent]):
+        log = self._get_irc_logger(evt.client, evt.channel)
+        if log:
+            log.info(
+                "* %s (%s) has kicked %s from %s (%s)",
+                evt.who.nick, evt.who.address,
+                evt.target, evt.channel, evt.message,
+            )
+
     async def on_message(self, evt: MessagedEvent):
-        # Always log message
-        self._log_irc_message(evt.client, evt.where, evt.who.nick, evt.message)
+        # Log message before parsing
+        log = self._get_irc_logger(evt.client, evt.where)
+        if log:
+            log.info("<%s> %s", evt.who.nick, evt.message)
+
         exec_kwargs = dict(
             channel=evt.where,
             sender=evt.who,
             bot=self,
-            client=evt.client
+            client=ClientProxy(evt.client, self)
         )
 
         # Parse commands

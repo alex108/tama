@@ -18,3 +18,4 @@ venv/
 # IDE files
 *.iml
 .idea/
+.vs/

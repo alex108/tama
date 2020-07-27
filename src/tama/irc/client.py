@@ -3,8 +3,9 @@ Handles the interpretation of parsed IRC messages and converts them to an
 observable event stream.
 """
 import asyncio as aio
-from typing import Tuple, List, Deque
 from collections import deque
+from time import time
+from typing import Tuple, List, Deque, Optional
 from logging import Logger, getLogger
 
 from tama.config import ServerConfig
@@ -20,10 +21,11 @@ class IRCClient:
     __slots__ = (
         "name", "startup_config", "stream", "bus",
         "nickname", "username", "realname",
-        "channel_list",
+        "_channel_list",
         "logger_name", "logger",
         "_starting_up", "_shutting_down", "_inbound_queue", "_outbound_queue",
         "_on_register",
+        "_waiting_for_pong",
     )
 
     # Client data
@@ -55,6 +57,8 @@ class IRCClient:
     # These are not immediately queued on create as the connection is not
     # registered yet.
     _on_register: Deque[IRCMessage]
+    # Handles wait for server PONG
+    _waiting_for_pong: Optional[str]
 
     def __init__(
         self, name: str, startup_config: ServerConfig, stream: IRCStream
@@ -64,7 +68,12 @@ class IRCClient:
 
         self.stream = stream
         self.bus = EventBus(accept=[
-            InvitedEvent, MessagedEvent, ClosedEvent
+            InvitedEvent,
+            BotJoinedEvent, ChannelJoinedEvent,
+            BotPartedEvent, ChannelPartedEvent,
+            BotKickedEvent, ChannelKickedEvent,
+            MessagedEvent, NoticedEvent,
+            ClosedEvent,
         ])
 
         self._starting_up = True
@@ -72,12 +81,13 @@ class IRCClient:
         self._inbound_queue = deque()
         self._outbound_queue = aio.Queue()
         self._on_register = deque()
+        self._waiting_for_pong = None
 
         self.nickname = startup_config.nick
         self.username = startup_config.user
         self.realname = startup_config.realname
 
-        self.channel_list = []
+        self._channel_list = []
 
         self.logger_name = f"tama.server.{name}.raw"
         self.logger = getLogger(self.logger_name)
@@ -116,15 +126,19 @@ class IRCClient:
     async def run(self) -> Tuple[str, ServerConfig]:
         inbound = aio.create_task(self._inbound())
         outbound = aio.create_task(self._outbound())
-        pending = []
+        timeout = aio.create_task(self._timeout())
         while not self._shutting_down:
             done, pending = await aio.wait(
-                [inbound, outbound], return_when=aio.FIRST_COMPLETED
+                [inbound, outbound, timeout], return_when=aio.FIRST_COMPLETED
             )
             if inbound in done:
                 inbound = aio.create_task(self._inbound())
             if outbound in done:
                 outbound = aio.create_task(self._outbound())
+            # Cancel timeout future if not done
+            if timeout not in done:
+                timeout.cancel()
+            timeout = aio.create_task(self._timeout())
         # Entered shutdown state, which means the inbound queue reached EOF.
         # Don't await any further because nothing can be sent anymore
         # Return startup config when connection dies for easy reconnection
@@ -152,27 +166,42 @@ class IRCClient:
             )
         srv_handler(msg)
 
-    async def _outbound(self):
+    async def _outbound(self) -> None:
         # Block until we have a new message to send
         msg = await self._outbound_queue.get()
         self.logger.info("<< %s", msg.raw[:-2].decode("utf-8"))
         await self.stream.send_message(msg)
 
-    # Upstream command handlers
-    def handle_server_default(self, msg: IRCMessage):
-        logger.info(
-            "[%s] %s", "rizon", msg.trailing
-        )
+    async def _timeout(self) -> None:
+        # 60 second PING interval
+        await aio.sleep(60)
+        if self._waiting_for_pong:
+            # If we timeout and already pinged, die
+            self._shutting_down = True
+        else:
+            msg = str(int(time()))
+            self.ping(msg)
+            self._waiting_for_pong = msg
 
-    def handle_server_ping(self, msg: IRCMessage):
+    # Upstream command handlers
+    def handle_server_default(self, msg: IRCMessage) -> None:
+        logger.debug("Unhandled IRC message: %s", msg.command)
+        # Do nothing for unhandled commands
+        return
+
+    def handle_server_ping(self, msg: IRCMessage) -> None:
         self.pong(msg.trailing)
 
-    def handle_server_nick(self, msg: IRCMessage):
+    def handle_server_pong(self, msg: IRCMessage) -> None:
+        if self._waiting_for_pong and self._waiting_for_pong == msg.trailing:
+            self._waiting_for_pong = None
+
+    def handle_server_nick(self, msg: IRCMessage) -> None:
         who = msg.parse_prefix_as_user()
         if who.nick == self.nickname:
             self.nickname = msg.trailing
 
-    def handle_server_privmsg(self, msg: IRCMessage):
+    def handle_server_privmsg(self, msg: IRCMessage) -> None:
         # If command param is the client nick, set the user as the location
         who = msg.parse_prefix_as_user()
         where = msg.middle[0]
@@ -185,88 +214,157 @@ class IRCClient:
             message=msg.trailing,
         ))
 
-    def handle_server_invite(self, msg: IRCMessage):
+    def handle_server_notice(self, msg: IRCMessage) -> None:
+        # If command param is the client nick, set the user as the location
+        who = msg.parse_prefix_as_user()
+        where = msg.middle[0]
+        if where == self.nickname:
+            where = who.nick
+        self.bus.broadcast(NoticedEvent(
+            client=self,
+            who=who,
+            where=where,
+            message=msg.trailing,
+        ))
+
+    def handle_server_invite(self, msg: IRCMessage) -> None:
         self.bus.broadcast(InvitedEvent(
             client=self,
             who=msg.parse_prefix_as_user(),
             to=msg.trailing,
         ))
 
-    def handle_server_join(self, msg: IRCMessage):
-        self.channel_list.append(msg.trailing)
-
-    def handle_server_kick(self, msg: IRCMessage):
+    def handle_server_join(self, msg: IRCMessage) -> None:
         who = msg.parse_prefix_as_user()
-        logger.info(
-            "Kicked from %s by %s (%s)", msg.middle[0], who.nick, msg.trailing
-        )
+        if who.nick == self.nickname:
+            self._channel_list.append(msg.trailing)
+            self.bus.broadcast(BotJoinedEvent(
+                client=self,
+                channel=msg.trailing,
+                who=who,
+            ))
+        else:
+            self.bus.broadcast(ChannelJoinedEvent(
+                client=self,
+                channel=msg.trailing,
+                who=who,
+            ))
 
-    def handle_server_error(self, msg: IRCMessage):
+    def handle_server_part(self, msg: IRCMessage) -> None:
+        who = msg.parse_prefix_as_user()
+        if who.nick == self.nickname:
+            try:
+                self._channel_list.remove(msg.trailing)
+            except ValueError:
+                logger.error(
+                    "Parted a channel that was never joined."
+                )
+            self.bus.broadcast(BotPartedEvent(
+                client=self,
+                channel=msg.middle[0],
+                who=who,
+                message=msg.trailing,
+            ))
+        else:
+            self.bus.broadcast(ChannelPartedEvent(
+                client=self,
+                channel=msg.middle[0],
+                who=who,
+                message=msg.trailing,
+            ))
+
+    def handle_server_kick(self, msg: IRCMessage) -> None:
+        who = msg.parse_prefix_as_user()
+        chan, target, *_ = msg.middle
+        if target == self.nickname:
+            try:
+                self._channel_list.remove(msg.trailing)
+            except ValueError:
+                logger.error(
+                    "Kicked from a channel that was never joined."
+                )
+            self.bus.broadcast(BotKickedEvent(
+                client=self,
+                channel=chan,
+                who=who,
+                target=target,
+                message=msg.trailing,
+            ))
+        else:
+            self.bus.broadcast(ChannelKickedEvent(
+                client=self,
+                channel=chan,
+                who=who,
+                target=target,
+                message=msg.trailing,
+            ))
+
+    def handle_server_error(self, msg: IRCMessage) -> None:
         self.bus.broadcast(ClosedEvent(
             client=self,
             message=msg.trailing,
         ))
 
     # Upstream reply code handlers
-    def handle_server_rpl_welcome(self, msg: IRCMessage):
+    def handle_server_rpl_welcome(self, msg: IRCMessage) -> None:
         self._starting_up = False
         while self._on_register:
             m = self._on_register.popleft()
             self._outbound_queue.put_nowait(m)
 
-    def handle_server_err_nicknameinuse(self, msg: IRCMessage):
+    def handle_server_err_nicknameinuse(self, msg: IRCMessage) -> None:
         # If we are still starting up, then retry with an underscore
         if self._starting_up:
             self.nickname = self.nickname + "_"
             self.nick(self.nickname)
 
     # Command executors
-    def user(self, username: str, realname: str):
+    def user(self, username: str, realname: str) -> None:
         self._outbound_queue.put_nowait(IRCMessage(
             command="USER",
             middle=(username, "0", "*"),
             trailing=realname,
         ))
 
-    def nick(self, nickname: str):
+    def nick(self, nickname: str) -> None:
         self._outbound_queue.put_nowait(IRCMessage(
             command="NICK",
             trailing=nickname,
         ))
 
-    def ping(self, payload: str):
+    def ping(self, payload: str) -> None:
         self._outbound_queue.put_nowait(IRCMessage(
             command="PING",
             trailing=payload,
         ))
 
-    def pong(self, payload: str):
+    def pong(self, payload: str) -> None:
         self._outbound_queue.put_nowait(IRCMessage(
             command="PONG",
             trailing=payload,
         ))
 
-    def join(self, channel: str):
+    def join(self, channel: str) -> None:
         self._outbound_queue.put_nowait(IRCMessage(
             command="JOIN",
             middle=(channel,)
         ))
 
-    def notice(self, target: str, message: str):
+    def notice(self, target: str, message: str) -> None:
         self._outbound_queue.put_nowait(IRCMessage(
             command="NOTICE",
             middle=(target,),
             trailing=message,
         ))
 
-    def privmsg(self, target: str, message: str):
+    def privmsg(self, target: str, message: str) -> None:
         self._outbound_queue.put_nowait(IRCMessage(
             command="PRIVMSG",
             middle=(target,),
             trailing=message,
         ))
 
-    def quit(self, reason: str):
+    def quit(self, reason: str) -> None:
         self._outbound_queue.put_nowait(IRCMessage(
             command="QUIT",
             trailing=reason,

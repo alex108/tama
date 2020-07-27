@@ -1,10 +1,12 @@
-from tama import api, IRCUser, IRCClient, TamaBot
+from tama import api, TamaBot
 
 __all__ = ["nick", "say", "message","quit_", "reload"]
 
 
 @api.command(permissions=["bot_control"])
-def nick(text: str, sender: IRCUser = None, client: IRCClient = None) -> None:
+def nick(
+    text: str, sender: TamaBot.User = None, client: TamaBot.Client = None
+) -> None:
     new_nick, *other = text.strip().split(" ", 1)
     if len(other) > 0:
         client.notice(sender.nick, "Invalid nickname")
@@ -13,7 +15,8 @@ def nick(text: str, sender: IRCUser = None, client: IRCClient = None) -> None:
 
 @api.command(permissions=["bot_control"])
 def say(
-    text: str, channel: str, sender: IRCUser = None, client: IRCClient = None
+    text: str, channel: str,
+    sender: TamaBot.User = None, client: TamaBot.Client = None
 ) -> None:
     payload = text.strip()
     if payload.startswith("#"):
@@ -23,17 +26,27 @@ def say(
         msg = msg[0]
     else:
         msg = text
-    client.privmsg(channel, msg)
+    client.message(channel, msg)
 
 
 @api.command(permissions=["bot_control"])
 def message(
-    text: str, sender: IRCUser = None, client: IRCClient = None
+    text: str, sender: TamaBot.User = None, client: TamaBot.Client = None
 ) -> None:
     target, *msg = text.strip().split(" ", 1)
     if len(msg) == 0:
         client.notice(sender.nick, "Empty message")
-    client.privmsg(target, msg[0])
+    client.message(target, msg[0])
+
+
+@api.command(permissions=["bot_control"])
+def notice(
+    text: str, sender: TamaBot.User = None, client: TamaBot.Client = None
+) -> None:
+    target, *msg = text.strip().split(" ", 1)
+    if len(msg) == 0:
+        client.notice(sender.nick, "Empty message")
+    client.notice(target, msg[0])
 
 
 @api.command("quit", permissions=["bot_control"])

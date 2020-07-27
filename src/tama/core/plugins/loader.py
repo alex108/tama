@@ -29,10 +29,9 @@ def load_plugins(path: str) -> List[Plugin]:
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
             spec.loader.exec_module(module)
-            # FIXME: logging
-            print(f"Plugin {py} loaded.")
+            logger.info(f"Plugin {py} loaded.")
             plugins.append(Plugin(module_name, module))
         except SyntaxError:
-            print(f"Plugin {py} malformed.")
+            logger.info(f"Plugin {py} malformed.")
 
     return plugins

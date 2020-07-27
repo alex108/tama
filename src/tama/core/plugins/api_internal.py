@@ -6,8 +6,6 @@ import asyncio as aio
 from typing import Protocol, Pattern, Match, Optional, Union, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tama.irc.user import IRCUser
-    from tama.irc.client import IRCClient
     from tama.core.bot import TamaBot
 
 __all__ = ["Action", "Command", "Regex"]
@@ -40,9 +38,9 @@ class Command(Action):
             text: str,
             *,
             channel: str = None,
-            sender: "IRCUser" = None,
+            sender: "TamaBot.User" = None,
             bot: "TamaBot" = None,
-            client: "IRCClient" = None
+            client: "TamaBot.Client" = None
         ) -> Optional[str]: ...
 
     class AsyncExecutor(Protocol):
@@ -51,9 +49,9 @@ class Command(Action):
             text: str,
             *,
             channel: str = None,
-            sender: "IRCUser" = None,
+            sender: "TamaBot.User" = None,
             bot: "TamaBot" = None,
-            client: "IRCClient" = None
+            client: "TamaBot.Client" = None
         ) -> Optional[str]: ...
 
     def __init__(
@@ -76,9 +74,9 @@ class Regex(Action):
             match: Match,
             *,
             channel: str = None,
-            sender: "IRCUser" = None,
+            sender: "TamaBot.User" = None,
             bot: "TamaBot" = None,
-            client: "IRCClient" = None
+            client: "TamaBot.Client" = None
         ) -> Optional[str]: ...
 
     class AsyncExecutor(Protocol):
@@ -87,9 +85,9 @@ class Regex(Action):
             match: Match,
             *,
             channel: str = None,
-            sender: "IRCUser" = None,
+            sender: "TamaBot.User" = None,
             bot: "TamaBot" = None,
-            client: "IRCClient" = None
+            client: "TamaBot.Client" = None
         ) -> Optional[str]: ...
 
     def __init__(
