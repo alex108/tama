@@ -1,6 +1,7 @@
 # Project files
 config.toml
 logs/
+data/fortune/*
 
 # Python
 *.py[cdo]

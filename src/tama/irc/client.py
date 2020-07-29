@@ -14,8 +14,6 @@ from tama.irc.stream import IRCStream, IRCMessage
 
 from .event import *
 
-logger = getLogger(__name__)
-
 
 class IRCClient:
     __slots__ = (
@@ -147,7 +145,12 @@ class IRCClient:
     async def _inbound(self) -> None:
         # Block if we have nothing to process
         if len(self._inbound_queue) == 0:
-            new_messages = await self.stream.read_messages()
+            try:
+                new_messages = await self.stream.read_messages()
+            except ConnectionError:
+                # Connection failed, shut down
+                self._shutting_down = True
+                return
             # Connection done, shut down
             if new_messages is None:
                 self._shutting_down = True
@@ -170,7 +173,11 @@ class IRCClient:
         # Block until we have a new message to send
         msg = await self._outbound_queue.get()
         self.logger.info("<< %s", msg.raw[:-2].decode("utf-8"))
-        await self.stream.send_message(msg)
+        try:
+            await self.stream.send_message(msg)
+        except ConnectionError:
+            # Connection failed, shut down
+            self._shutting_down = True
 
     async def _timeout(self) -> None:
         # 60 second PING interval
@@ -185,7 +192,7 @@ class IRCClient:
 
     # Upstream command handlers
     def handle_server_default(self, msg: IRCMessage) -> None:
-        logger.debug("Unhandled IRC message: %s", msg.command)
+        getLogger(__name__).debug("Unhandled IRC message: %s", msg.command)
         # Do nothing for unhandled commands
         return
 
@@ -256,7 +263,7 @@ class IRCClient:
             try:
                 self._channel_list.remove(msg.trailing)
             except ValueError:
-                logger.error(
+                getLogger(__name__).error(
                     "Parted a channel that was never joined."
                 )
             self.bus.broadcast(BotPartedEvent(
@@ -280,7 +287,7 @@ class IRCClient:
             try:
                 self._channel_list.remove(msg.trailing)
             except ValueError:
-                logger.error(
+                getLogger(__name__).error(
                     "Kicked from a channel that was never joined."
                 )
             self.bus.broadcast(BotKickedEvent(

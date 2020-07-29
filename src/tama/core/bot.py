@@ -9,6 +9,7 @@ from typing import List, Dict, Optional, Union
 from pathlib import Path
 
 from tama.config import Config
+from tama.util.trie import Trie
 from tama.irc import IRCClient, IRCUser
 from tama.irc.event import *
 from tama.core.plugins import *
@@ -29,8 +30,11 @@ class TamaBot:
     clients: List[IRCClient]
     plugins: List[Plugin]
 
+    # Registered actions
     act_commands: Dict[str, Command]
     act_regex: List[Regex]
+
+    act_commands_idx: Trie
 
     # Enumeration for exit status
     ExitStatus = ExitStatus
@@ -58,6 +62,7 @@ class TamaBot:
         # For registered actions
         self.act_commands = {}
         self.act_regex = []
+        self.act_commands_idx = Trie()
         # Only set exit status when exiting
         self._exit_status = None
         # Register plugin actions
@@ -79,6 +84,7 @@ class TamaBot:
             for act in plug.actions:
                 if isinstance(act, Command):
                     self.act_commands[act.name] = act
+                    self.act_commands_idx.add(act.name)
                 elif isinstance(act, Regex):
                     self.act_regex.append(act)
 
@@ -225,17 +231,31 @@ class TamaBot:
             else:
                 text = text[0]
 
+            # Check for exact matches
             r = self.act_commands.get(cmd)
-            if r:
-                if r.is_async:
-                    result = await r.async_executor(text, **exec_kwargs)
+
+            if not r:
+                # Check for non-exact matches
+                cmd_match = self.act_commands_idx.search(cmd)
+                if len(cmd_match) == 0:
+                    return
+                elif len(cmd_match) == 1:
+                    r = self.act_commands.get(cmd_match[0])
                 else:
-                    result = r.executor(text, **exec_kwargs)
+                    dym = "Did you mean: " + cmd_match[0]
+                    for m in cmd_match[1:-1]:
+                        dym += ", " + m
+                    dym += " or " + cmd_match[-1] + "?"
+                    evt.client.notice(evt.who.nick, dym)
+                    return
 
-                if result:
-                    evt.client.privmsg(evt.where, f"{evt.who.nick}, {result}")
+            if r.is_async:
+                result = await r.async_executor(text, **exec_kwargs)
+            else:
+                result = r.executor(text, **exec_kwargs)
 
-            return
+            if result:
+                evt.client.privmsg(evt.where, f"{evt.who.nick}, {result}")
 
         # Run regexp parsers
         for r in self.act_regex:

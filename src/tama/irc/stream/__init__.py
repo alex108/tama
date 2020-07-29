@@ -22,6 +22,7 @@ See also: https://tools.ietf.org/html/rfc1459
 """
 import asyncio as aio
 import ssl
+from logging import getLogger
 from typing import List, Optional
 
 from tama.irc.stream.payloads import IRCMessage
@@ -48,9 +49,9 @@ class IRCStream:
     @classmethod
     async def create(cls, host: str, port: int, secure: bool = False):
         if not secure:
-            print(f"Connecting to irc://{host}:{port}")
+            getLogger(__name__).info(f"Connecting to irc://{host}:{port}")
         else:
-            print(f"Connecting to ircs://{host}:{port}")
+            getLogger(__name__).info(f"Connecting to ircs://{host}:{port}")
         ssl_ctx = None
         if secure:
             ssl_ctx = ssl.create_default_context()

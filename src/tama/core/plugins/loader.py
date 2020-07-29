@@ -6,8 +6,6 @@ from logging import getLogger
 
 from .plugin import Plugin
 
-logger = getLogger(__name__)
-
 __all__ = ["load_plugins"]
 
 
@@ -29,9 +27,11 @@ def load_plugins(path: str) -> List[Plugin]:
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
             spec.loader.exec_module(module)
-            logger.info(f"Plugin {py} loaded.")
+            getLogger(__name__).info(f"Plugin {py} loaded.")
             plugins.append(Plugin(module_name, module))
         except SyntaxError:
-            logger.info(f"Plugin {py} malformed.")
+            getLogger(__name__).error(f"Plugin {py} malformed.")
+        except Exception as exc:  # noqa
+            getLogger(__name__).exception(f"Error while loading plugin {py}:")
 
     return plugins
