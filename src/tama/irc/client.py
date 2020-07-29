@@ -129,16 +129,25 @@ class IRCClient:
             done, pending = await aio.wait(
                 [inbound, outbound, timeout], return_when=aio.FIRST_COMPLETED
             )
+            # Getting the result from the future will raise exceptions
             if inbound in done:
+                inbound.result()
                 inbound = aio.create_task(self._inbound())
             if outbound in done:
+                outbound.result()
                 outbound = aio.create_task(self._outbound())
             # Cancel timeout future if not done
             if timeout not in done:
                 timeout.cancel()
+            else:
+                timeout.result()
             timeout = aio.create_task(self._timeout())
-        # Entered shutdown state, which means the inbound queue reached EOF.
-        # Don't await any further because nothing can be sent anymore
+        # Entered shutdown state, which means the inbound queue reached EOF or
+        # the connection has timed out.
+        # Don't await any further because nothing can be sent/received anymore.
+        inbound.cancel()
+        outbound.cancel()
+        timeout.cancel()
         # Return startup config when connection dies for easy reconnection
         return self.name, self.startup_config
 
@@ -149,10 +158,12 @@ class IRCClient:
                 new_messages = await self.stream.read_messages()
             except ConnectionError:
                 # Connection failed, shut down
+                getLogger(__name__).exception("IRC connection lost")
                 self._shutting_down = True
                 return
             # Connection done, shut down
             if new_messages is None:
+                getLogger(__name__).info("IRC connection closed")
                 self._shutting_down = True
                 return
             # Queue parsed messages
@@ -177,13 +188,15 @@ class IRCClient:
             await self.stream.send_message(msg)
         except ConnectionError:
             # Connection failed, shut down
+            getLogger(__name__).exception("IRC connection lost")
             self._shutting_down = True
 
     async def _timeout(self) -> None:
-        # 60 second PING interval
-        await aio.sleep(60)
+        # 30 second PING interval
+        await aio.sleep(30)
         if self._waiting_for_pong:
             # If we timeout and already pinged, die
+            getLogger(__name__).error("IRC connection timed out")
             self._shutting_down = True
         else:
             msg = str(int(time()))
