@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Dict
+from typing import Optional, List, Dict
 
 __all__ = ["Config", "ServerConfig", "TamaConfig"]
 
@@ -19,6 +19,7 @@ class ServerConfig:
     nick: str
     user: str
     realname: str
+    channels: Optional[List[str]]
     service_auth: Optional[ServerServiceAuthConfig]
 
 

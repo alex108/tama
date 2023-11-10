@@ -101,7 +101,7 @@ def validate_map_schema(obj: Any, schema: Type[T], key: str = "") -> T:
 
         mapped_list = []
         for i, elem in enumerate(obj):
-            m = validate_map_schema(elem, args[1], key=key + "." + str(i))
+            m = validate_map_schema(elem, args[0], key=key + "." + str(i))
             mapped_list.append(m)
         return mapped_list
 

@@ -16,6 +16,9 @@
     # Password if the server requires PASS authentication on connect
     # password = ""
 
+    # List of channels to join on connect
+    channels = []
+
         # Servers might use service nickname authentication. If this section is
         # configured, bot will proceed to identify with the given service as
         # soon as RPL_WELCOME is received.

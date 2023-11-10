@@ -16,6 +16,7 @@ from tama.core.plugins import *
 
 from .exit_status import ExitStatus
 from .client_proxy import ClientProxy
+from .exc import NameCollisionError
 
 __all__ = ["TamaBot"]
 
@@ -57,8 +58,10 @@ class TamaBot:
         )
         # Client bookkeeping
         self.clients = []
-        # Load plugins
-        self.plugins = loader.load_plugins("plugins")
+        # Load builtin plugins
+        self.plugins = loader.load_builtins()
+        # Load external plugins
+        self.plugins.extend(loader.load_plugins("plugins"))
         # For registered actions
         self.act_commands = {}
         self.act_regex = []
@@ -83,6 +86,13 @@ class TamaBot:
         for plug in self.plugins:
             for act in plug.actions:
                 if isinstance(act, Command):
+                    if act.name in self.act_commands:
+                        prev_act = self.act_commands[act.name]
+                        raise NameCollisionError(
+                            act.name,
+                            prev_act.parent_plugin().module_name,
+                            act.parent_plugin().module_name
+                        )
                     self.act_commands[act.name] = act
                     self.act_commands_idx.add(act.name)
                 elif isinstance(act, Regex):

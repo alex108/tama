@@ -67,19 +67,21 @@ def get_fortune() -> str:
     # FIXME: Conditional probability means this will make smaller file fortunes
     # much more prevalent. Make a fairer random choice.
     file: FortuneFile = random.choice(fortunes)
-    print(file.name)
+    return get_fortune_from_file(file)
+
+
+def get_fortune_from_file(file: FortuneFile) -> str:
     # We don't want to get the last index as it's empty
     rand = random.randint(0, file.total-1)
     idx, next_idx = file.offsets[rand:rand+2]
     # -3 removes \n%\n
     cookie = file.data[idx:next_idx-3]
     # Replace tabs for spaces
-    cookie = cookie.replace(b"\t", b"    ")
+    cookie = cookie.expandtabs(8)
     # Decode text
     cookie = cookie.decode("utf-8")
     # Deal with rot-13
     if file.rotated:
-        print("rot")
         cookie = codecs.decode(cookie, "rot_13")
     return cookie
 
@@ -87,6 +89,15 @@ def get_fortune() -> str:
 @api.command()
 def fortune(_, channel: str = None, client: TamaBot.Client = None) -> None:
     cookie = get_fortune()
+    for line in cookie.split("\n"):
+        client.message(channel, line)
+
+
+@api.command()
+def book(_, channel: str = None, client: TamaBot.Client = None) -> None:
+    cookie = get_fortune_from_file(
+        next(f for f in fortunes if f.name == "literature")
+    )
     for line in cookie.split("\n"):
         client.message(channel, line)
 

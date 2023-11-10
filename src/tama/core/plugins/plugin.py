@@ -1,7 +1,10 @@
+import weakref
 from types import ModuleType, FunctionType
 from typing import Optional, List
 
 from tama.core.plugins.api_internal import *
+
+__all__ = ["Plugin"]
 
 
 class Plugin:
@@ -33,3 +36,4 @@ class Plugin:
                 continue
             if isinstance(info, Action):
                 self.actions.append(info)
+                info.parent_plugin = weakref.ref(self)

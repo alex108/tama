@@ -3,10 +3,12 @@ Defines the plugin API internals.
 """
 import re
 import asyncio as aio
-from typing import Protocol, Pattern, Match, Optional, Union, Any, TYPE_CHECKING
+from typing import Protocol, Callable, Pattern, Match, Optional, Union, Any, \
+                   TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tama.core.bot import TamaBot
+    from tama.core.plugins.plugin import Plugin
 
 __all__ = ["Action", "Command", "Regex"]
 
@@ -15,6 +17,9 @@ class Action:
     is_async: bool
     executor: Optional[Any]
     async_executor: Optional[Any]
+
+    # This is a weak reference
+    parent_plugin: Optional[Callable[[], "Plugin"]]
 
     def __init__(self, executor: Any):
         if aio.iscoroutinefunction(executor):
@@ -29,6 +34,7 @@ class Action:
 
 class Command(Action):
     name: str
+    docstring: Optional[str]
     executor: Optional["Command.Executor"]
     async_executor: Optional["Command.AsyncExecutor"]
 
@@ -57,10 +63,12 @@ class Command(Action):
     def __init__(
         self,
         executor: Union["Command.Executor", "Command.AsyncExecutor"],
-        name: str
+        name: str,
+        docstring: Optional[str] = None
     ):
         super().__init__(executor)
         self.name = name
+        self.docstring = docstring
 
 
 class Regex(Action):

@@ -7,6 +7,7 @@ __all__ = ["nick", "say", "message","quit_", "reload"]
 def nick(
     text: str, sender: TamaBot.User = None, client: TamaBot.Client = None
 ) -> None:
+    """<nick> - changes nick to <nick>"""
     new_nick, *other = text.strip().split(" ", 1)
     if len(other) > 0:
         client.notice(sender.nick, "Invalid nickname")

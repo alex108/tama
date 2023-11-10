@@ -112,6 +112,11 @@ class IRCClient:
                 middle=(config.service_auth.service or "NickServ",),
                 trailing=cmd,
             ))
+        if config.channels:
+            obj._on_register.extend([IRCMessage(
+                command="JOIN",
+                middle=(chan,)
+            ) for chan in config.channels])
         return obj
 
     @classmethod
@@ -158,7 +163,7 @@ class IRCClient:
                 new_messages = await self.stream.read_messages()
             except ConnectionError:
                 # Connection failed, shut down
-                getLogger(__name__).exception("IRC connection lost")
+                getLogger(__name__).exception("IRC connection error")
                 self._shutting_down = True
                 return
             # Connection done, shut down
@@ -188,7 +193,7 @@ class IRCClient:
             await self.stream.send_message(msg)
         except ConnectionError:
             # Connection failed, shut down
-            getLogger(__name__).exception("IRC connection lost")
+            getLogger(__name__).exception("IRC connection error")
             self._shutting_down = True
 
     async def _timeout(self) -> None:

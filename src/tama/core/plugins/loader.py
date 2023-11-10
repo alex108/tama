@@ -1,12 +1,25 @@
 import os
 import sys
+import importlib
 import importlib.util
 from typing import List
 from logging import getLogger
 
 from .plugin import Plugin
 
-__all__ = ["load_plugins"]
+__all__ = ["load_builtins", "load_plugins"]
+
+
+def load_builtins() -> List[Plugin]:
+    builtin_pkg = "tama.core.plugins.builtins"
+    builtins = importlib.import_module(builtin_pkg)
+    return [
+        Plugin(
+            f"{builtin_pkg}.{module_name}",
+            importlib.import_module(f"{builtin_pkg}.{module_name}")
+        )
+        for module_name in builtins.__all__
+    ]
 
 
 def load_plugins(path: str) -> List[Plugin]:
